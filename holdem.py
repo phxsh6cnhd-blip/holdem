@@ -3,7 +3,7 @@ import random
 import time
 from streamlit_autorefresh import st_autorefresh
 
-# 1. 페이지 설정 및 자동 새로고침 (2초)
+# 1. 페이지 설정 및 자동 새로고침
 st.set_page_config(page_title="GG Revo Holdem", layout="centered")
 st_autorefresh(interval=2000, key="poker_refresh")
 
@@ -70,14 +70,14 @@ def render_card(c):
     is_red = any(s in c for s in ['♥', '♦'])
     return f"<div class='card {'red' if is_red else ''}'>{c}</div>"
 
-# --- 올인 시 자동 런아웃 (오타 수정됨) ---
+# --- 올인 자동 런아웃 ---
 def run_auto_board():
     while len(server["board"]) < 5:
         time.sleep(1.5)
         if not server["board"]:
             server["board"].extend([server["deck"].pop() for _ in range(3)])
         else:
-            server["board"].append(server["deck"].pop()) # 이 부분 오타 수정!
+            server["board"].append(server["deck"].pop()) # 괄호 방식 수정 완료
         st.rerun()
     server["game_status"] = "SHOWDOWN"
     server["is_allin_state"] = False
@@ -90,7 +90,7 @@ def award_pot(winner_name):
     server.update({"pot": 0.0, "board": [], "game_status": "WAITING", "is_allin_state": False, "current_bet": 0.0})
     if server["players"][opp_name]["stack"] <= 0: server["game_status"] = "GAME_OVER"
 
-# --- 메인 렌더링 ---
+# --- 메인 렌더링 시작 ---
 if "my_name" not in st.session_state:
     st.title("💰 GG REVO HOLDEM")
     name = st.text_input("닉네임 입력").strip()
@@ -101,17 +101,22 @@ if "my_name" not in st.session_state:
 else:
     my_name = st.session_state.my_name
     p_names = list(server["players"].keys())
+    
+    # [핵심] KeyError 방지 로직: 내 이름이 명단에 없으면 세션 초기화 후 재입장 유도
+    if my_name not in server["players"]:
+        st.session_state.clear()
+        st.rerun()
+
     opp_name = [n for n in p_names if n != my_name][0] if len(p_names) > 1 else None
-    my_info = server["players"][my_name]
+    my_info = server["players"][my_name] # 이제 여기서 에러 안 남!
     is_host = p_names[0] == my_name
 
     st.markdown("<div class='table-container'>", unsafe_allow_html=True)
     
-    # 1. 상대방 (상단)
+    # 1. 상대방 영역
     if opp_name:
         opp_info = server["players"][opp_name]
         opp_hand_html = ""
-        # 쇼다운 상태면 카드 공개, 아니면 뒷면
         if server["game_status"] == "SHOWDOWN":
             opp_hand_html = f"<div style='margin-top:5px;'>{''.join([render_card(c) for c in opp_info['hand']])}</div>"
         else:
@@ -127,7 +132,7 @@ else:
     total_pot = server["pot"] + sum(p["bet"] for p in server["players"].values())
     st.markdown(f"<div class='pot-box'>Total Pot : {total_pot:,.0f}</div>", unsafe_allow_html=True)
 
-    # 3. 나 (하단)
+    # 3. 내 영역
     my_cards_html = "".join([render_card(c) for c in my_info["hand"]]) if server["game_status"] != "WAITING" else ""
     st.markdown(f"<div class='player-seat pos-bottom'><b>{my_name}</b><br><span style='color:#5bc0de;'>{my_info['stack']:,.0f}</span><div style='margin-top:5px;'>{my_cards_html}</div></div>", unsafe_allow_html=True)
     if server["btn_idx"] == p_names.index(my_name):
@@ -135,7 +140,7 @@ else:
     
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # 4. 액션 버튼 (테이블 밖)
+    # 4. 액션 버튼
     if server["game_status"] == "PLAYING" and not server["is_allin_state"]:
         cur_p = p_names[server["current_turn_idx"]]
         if cur_p == my_name:
