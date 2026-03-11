@@ -1,26 +1,35 @@
 import streamlit as st
 import random
-from datetime import datetime
-from streamlit_autorefresh import st_autorefresh # 자동 새로고침 라이브러리
+from streamlit_autorefresh import st_autorefresh
 
-# 1. 페이지 설정
-st.set_page_config(page_title="헤즈업 홀덤 Pro", layout="centered")
+# 1. 페이지 설정 및 다크 모드 스타일 UI
+st.set_page_config(page_title="헤즈업 챔피언십", layout="centered")
 
-# --- 자동 새로고침 설정 (2초마다 실행) ---
-# 이 함수가 실행되면 사용자가 버튼을 안 눌러도 2초마다 코드가 재실행됨
-count = st_autorefresh(interval=2000, key="fizzbuzzcounter")
+# 2초마다 자동 새로고침 (상대방의 액션을 실시간으로 확인)
+st_autorefresh(interval=2000, key="poker_refresh")
 
 st.markdown("""
     <style>
-    .stButton>button { width: 100%; border-radius: 12px; height: 3.5em; font-weight: bold; }
-    .action-turn { 
-        background-color: #ff4b4b; color: white; padding: 10px; 
-        border-radius: 10px; text-align: center; font-weight: bold; margin-bottom: 10px;
+    /* 전체 배경을 어둡게 (눈 보호) */
+    .stApp { background-color: #0e1117; color: #ffffff; }
+    .stButton>button { width: 100%; border-radius: 10px; font-weight: bold; }
+    
+    /* 홀덤 테이블 느낌의 UI */
+    .poker-table {
+        background-color: #1a472a; border: 5px solid #3d2b1f;
+        border-radius: 100px; padding: 40px; text-align: center;
+        margin-bottom: 20px; border-style: double;
     }
-    .my-hand-box { 
-        background-color: #e8f5e9; padding: 20px; border-radius: 15px; 
-        text-align: center; border: 3px solid #27ae60; 
+    /* 카드 박스 (다크톤) */
+    .card-box {
+        background-color: #2d2d2d; color: #ff4b4b;
+        padding: 15px; border-radius: 10px;
+        border: 2px solid #555; display: inline-block;
+        width: 100px; margin: 5px; font-size: 1.5em;
+        font-weight: bold;
     }
+    .info-text { font-size: 1.1em; color: #aaa; }
+    .pot-text { font-size: 1.8em; color: #ffeb3b; font-weight: bold; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -28,110 +37,146 @@ st.markdown("""
 @st.cache_resource
 def get_game_server():
     return {
-        "players": {}, 
-        "board": [],
-        "btn_idx": 0,
+        "players": {}, # {닉네임: {"hand": [], "bb_left": 100.0, "status": "LIVE"}}
+        "board": [], 
+        "pot": 0.0, 
+        "bb_amount": 2.0, 
+        "btn_idx": 0, 
         "current_turn_idx": 0,
-        "game_status": "WAITING",
-        "pot": 0,
+        "last_action": "게임을 대기 중입니다.", 
+        "game_status": "WAITING", 
         "deck": []
     }
 
 server = get_game_server()
 
-# --- 방장 자동 임명 로직 ---
-def get_host_name():
-    if not server["players"]: return None
-    return list(server["players"].keys())[0]
+# 3. 로직 함수
+def next_turn():
+    server["current_turn_idx"] = 1 - server["current_turn_idx"]
 
-# 3. 입장 로직
+# --- 입장 및 세션 체크 ---
 if "my_name" not in st.session_state:
-    st.title("♠️ 실시간 홀덤 룸")
+    st.title("♠️ 리얼 홀덤 테이블")
     with st.form("entry"):
-        name = st.text_input("닉네임 입력").strip()
+        name = st.text_input("닉네임").strip()
         if st.form_submit_button("입장"):
             if name and name not in server["players"]:
-                server["players"][name] = {"hand": [], "chips": 10000}
+                server["players"][name] = {"hand": [], "bb_left": 100.0, "status": "LIVE"}
                 st.session_state.my_name = name
                 st.rerun()
             else:
-                st.error("이미 사용 중인 이름이거나 빈칸이야!")
+                st.error("이름을 입력하거나 중복을 확인해줘!")
 else:
     my_name = st.session_state.my_name
-    player_names = list(server["players"].keys())
+    p_names = list(server["players"].keys())
     
     if my_name not in server["players"]:
         st.session_state.clear()
         st.rerun()
+    
+    is_host = p_names[0] == my_name
+    my_info = server["players"][my_name]
 
-    host_name = get_host_name()
-    is_host = (my_name == host_name)
+    # --- 사이드바: 플레이어 정보 ---
+    st.sidebar.title("📊 플레이어 정보")
+    for p in p_names:
+        info = server["players"][p]
+        st.sidebar.write(f"**{p}**: {info['bb_left']:.1f} BB")
 
-    # 사이드바 (자동으로 갱신되어 보임)
-    st.sidebar.title("👥 참여자 현황")
-    for i, p_name in enumerate(player_names):
-        mark = "👑" if p_name == host_name else "👤"
-        pos = ""
-        if len(player_names) == 2 and server["game_status"] == "PLAYING":
-            pos = " (BTN/SB)" if i == server["btn_idx"] else " (BB)"
-        st.sidebar.write(f"{mark} {p_name}{pos} {'(나)' if p_name == my_name else ''}")
-
-    # 방장 메뉴
     if is_host:
-        with st.sidebar.expander("⚙️ 방장 관리"):
-            if st.button("♻️ 서버 전체 초기화"):
+        with st.sidebar.expander("🛠 방장 설정"):
+            if st.button("♻️ 전체 리셋"):
                 server["players"].clear()
                 server["game_status"] = "WAITING"
                 st.rerun()
             
-            if server["game_status"] == "WAITING" and len(player_names) >= 2:
-                if st.button("🚀 게임 시작"):
-                    suits, ranks = ['♠','♥','♦','♣'], ['2','3','4','5','6','7','8','9','10','J','Q','K','A']
+            if server["game_status"] == "WAITING" and len(p_names) == 2:
+                if st.button("🚀 NEXT HAND (Deal)"):
+                    suits = ['♠','♥','♦','♣']
+                    ranks = ['2','3','4','5','6','7','8','9','10','J','Q','K','A']
                     deck = [r+s for s in suits for r in ranks]
                     random.shuffle(deck)
-                    for p in server["players"]:
-                        server["players"][p]["hand"] = [deck.pop(), deck.pop()]
                     
-                    server.update({"deck": deck, "board": [], "game_status": "PLAYING", "pot": 0})
-                    server["current_turn_idx"] = server["btn_idx"]
+                    # 프리플랍 세팅 (버튼 교대)
+                    server["btn_idx"] = 1 - server["btn_idx"]
+                    server["current_turn_idx"] = server["btn_idx"] # 헤즈업: BTN이 먼저
+                    
+                    for p in server["players"]:
+                        server["players"][p].update({"hand": [deck.pop(), deck.pop()], "status": "LIVE"})
+                    
+                    server.update({"deck": deck, "board": [], "game_status": "PLAYING", "pot": 0.0, "last_action": "새로운 핸드가 시작되었습니다."})
                     st.rerun()
 
-    # --- 메인 게임 화면 ---
+    # --- 메인 게임 UI ---
     if server["game_status"] == "PLAYING":
-        current_player = player_names[server["current_turn_idx"]]
-        if current_player == my_name:
-            st.markdown("<div class='action-turn'>🔥 당신의 차례입니다!</div>", unsafe_allow_html=True)
-        else:
-            st.markdown(f"<div class='action-turn' style='background-color:#555;'>⏳ {current_player}의 차례...</div>", unsafe_allow_html=True)
+        # 1. 테이블 UI
+        st.markdown(f"""<div class="poker-table">
+            <p class="info-text">COMMUNITY BOARD</p>
+            <h2 style="color:white;">{' | '.join(server['board']) if server['board'] else "PRE-FLOP"}</h2>
+            <hr style="border: 0.5px solid #2a633d;">
+            <p class="info-text">TOTAL POT</p>
+            <p class="pot-text">{server['pot']:.1f} BB</p>
+            <p style="color:#ffeb3b; font-size:0.9em;">최근 액션: {server['last_action']}</p>
+        </div>""", unsafe_allow_html=True)
 
-        st.write("### 🎴 내 핸드")
-        h = server["players"][my_name]["hand"]
-        st.markdown(f"<div class='my-hand-box'><h1>{h[0]} {h[1]}</h1></div>", unsafe_allow_html=True)
-        
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            if st.button("Check/Call", disabled=(current_player != my_name)):
-                server["current_turn_idx"] = (server["current_turn_idx"] + 1) % len(player_names)
-                st.rerun()
-        with c2:
-            if st.button("Raise", disabled=(current_player != my_name)):
-                server["current_turn_idx"] = (server["current_turn_idx"] + 1) % len(player_names)
-                st.rerun()
-        with c3:
-            if st.button("Fold", disabled=(current_player != my_name)):
-                server["game_status"] = "WAITING"
-                st.rerun()
+        # 2. 내 핸드 표시
+        st.write("### 🎴 내 카드")
+        h = my_info["hand"]
+        st.markdown(f"<div><div class='card-box'>{h[0]}</div><div class='card-box'>{h[1]}</div></div>", unsafe_allow_html=True)
+        st.write(f"나의 잔고: **{my_info['bb_left']:.1f} BB**")
 
         st.divider()
-        st.write("### 🏟 커뮤니티 카드")
-        if server["board"]:
-            st.markdown(f"## {' | '.join(server['board'])}")
-        
+
+        # 3. 베팅 액션 (내 차례일 때만)
+        cur_p = p_names[server["current_turn_idx"]]
+        if cur_p == my_name:
+            st.success("🔥 당신의 차례입니다!")
+            c1, c2, c3, c4 = st.columns(4)
+            with c1:
+                if st.button("Check/Call"):
+                    server["last_action"] = f"{my_name}이(가) Check/Call 했습니다."
+                    next_turn()
+                    st.rerun()
+            with c2:
+                # 레이즈 입력
+                r_amt = st.number_input("Raise (BB)", min_value=1.0, max_value=float(my_info["bb_left"]), value=2.0, step=1.0)
+                if st.button(f"{r_amt}BB Raise"):
+                    my_info["bb_left"] -= r_amt
+                    server["pot"] += r_amt
+                    server["last_action"] = f"{my_name}이(가) {r_amt}BB Raise 했습니다."
+                    next_turn()
+                    st.rerun()
+            with c3:
+                if st.button("ALL-IN"):
+                    allin = my_info["bb_left"]
+                    my_info["bb_left"] = 0
+                    server["pot"] += allin
+                    server["last_action"] = f"{my_name}이(가) ALL-IN! ({allin:.1f}BB)"
+                    next_turn()
+                    st.rerun()
+            with c4:
+                if st.button("Fold"):
+                    server["last_action"] = f"{my_name}이(가) Fold 했습니다."
+                    server["game_status"] = "WAITING" # 판 종료
+                    st.rerun()
+        else:
+            st.warning(f"⏳ {cur_p}의 차례를 기다리는 중...")
+
+        # 4. 방장 전용 보드 제어
         if is_host and len(server["board"]) < 5:
+            st.write("")
             if st.button("➡️ 다음 카드 오픈"):
-                if not server["board"]: server["board"].extend([server["deck"].pop() for _ in range(3)])
-                else: server["board"].append(server["deck"].pop())
+                if not server["board"]:
+                    server["board"].extend([server["deck"].pop() for _ in range(3)])
+                else:
+                    server["board"].append(server["deck"].pop())
+                # 플랍 이후는 BB부터 액션
                 server["current_turn_idx"] = 1 - server["btn_idx"]
                 st.rerun()
     else:
-        st.info("두 명 이상 접속하면 방장이 게임을 시작할 수 있습니다.")
+        st.info("방장이 'NEXT HAND'를 누르면 게임이 시작됩니다.")
+
+    # 수동 새로고침 (비상용)
+    st.sidebar.write("---")
+    if st.sidebar.button("🔄 수동 새로고침"):
+        st.rerun()
