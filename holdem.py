@@ -109,4 +109,81 @@ else:
         board_html = "".join([render_card(c) for c in server["board"]]) if server["board"] else "<h3 style='opacity:0.5;'>PRE-FLOP</h3>"
         st.markdown(board_html, unsafe_allow_html=True)
         st.markdown(f"<div style='margin-top:20px;'><span style='color:#ffeb3b; font-size:2em; font-weight:bold;'>{server['pot']:.1f} BB</span></div>", unsafe_allow_html=True)
-        st.markdown(f"<p style='color:#aaa; font-size:0.9em;'>{server['last_action']
+        st.markdown(f"<p style='color:#aaa; font-size:0.9em;'>{server['last_action']}</p>", unsafe_allow_html=True)
+    else:
+        st.markdown("<h3>GAME WAITING...</h3>", unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # --- 플레이어 정보 영역 ---
+    if server["game_status"] == "PLAYING":
+        col_left, col_right = st.columns(2)
+        
+        with col_left: # 내 영역
+            st.markdown(f"🙋 **{my_name} (ME)**")
+            my_hand_html = "".join([render_card(c) for c in my_info["hand"]])
+            st.markdown(my_hand_html, unsafe_allow_html=True)
+            st.write(f"💰 {my_info['bb']:.1f} BB")
+        
+        with col_right: # 상대 영역
+            opp_name = [n for n in p_names if n != my_name][0] if len(p_names) > 1 else "..."
+            st.markdown(f"👤 **{opp_name}**")
+            # 상대 카드는 뒷면으로
+            st.markdown("<div class='card-back'></div><div class='card-back'></div>", unsafe_allow_html=True)
+            if len(p_names) > 1:
+                st.write(f"💰 {server['players'][opp_name]['bb']:.1f} BB")
+
+        st.divider()
+
+        # --- 액션 버튼 ---
+        cur_p_name = p_names[server["current_turn_idx"]]
+        if cur_p_name == my_name:
+            st.success("🔥 YOUR TURN")
+            b_col1, b_col2, b_col3 = st.columns(3)
+            
+            with b_col1:
+                if st.button("CALL / CHECK"):
+                    server["last_action"] = f"{my_name}: Call"; server["current_turn_idx"] = 1 - server["current_turn_idx"]; st.rerun()
+            
+            with b_col2:
+                if server["is_allin"]:
+                    st.button("RAISE", disabled=True)
+                else:
+                    # 레이즈 입력창과 버튼
+                    r_val = st.number_input("AMT", 1.0, float(my_info["bb"]), 2.0, 1.0, label_visibility="collapsed")
+                    if st.button(f"{r_val}BB RAISE"):
+                        my_info["bb"] -= r_val; server["pot"] += r_val
+                        server["last_action"] = f"{my_name}: {r_val}BB Raise"; server["current_turn_idx"] = 1 - server["current_turn_idx"]; st.rerun()
+            
+            with b_col3:
+                if st.button("ALL-IN"):
+                    allin_amt = my_info["bb"]; my_info["bb"] = 0; server["pot"] += allin_amt
+                    server["is_allin"] = True; server["last_action"] = f"{my_name}: ALL-IN!"
+                    server["current_turn_idx"] = 1 - server["current_turn_idx"]; st.rerun()
+
+            if st.button("FOLD", use_container_width=True):
+                server["game_status"] = "WAITING"; server["last_action"] = f"{my_name}: Folded"; st.rerun()
+        else:
+            st.warning(f"⏳ Waiting for {cur_p_name}...")
+
+    # --- 방장 도구 (사이드바) ---
+    if is_host:
+        with st.sidebar:
+            st.title("👑 HOST MENU")
+            if st.button("♻️ RESET SERVER"):
+                server["players"] = {}; server["game_status"] = "WAITING"; st.rerun()
+            
+            if len(p_names) == 2 and server["game_status"] == "WAITING":
+                if st.button("🚀 DEAL NEXT HAND"):
+                    suits, ranks = ['♠','♥','♦','♣'], ['2','3','4','5','6','7','8','9','10','J','Q','K','A']
+                    deck = [r+s for s in suits for r in ranks]
+                    random.shuffle(deck)
+                    for p in server["players"]: server["players"][p]["hand"] = [deck.pop(), deck.pop()]
+                    server.update({"deck": deck, "board": [], "game_status": "PLAYING", "pot": 0.0, "is_allin": False, "btn_idx": 1-server["btn_idx"]})
+                    server["current_turn_idx"] = server["btn_idx"]; st.rerun()
+
+            if server["game_status"] == "PLAYING" and len(server["board"]) < 5:
+                if st.button("➡️ OPEN NEXT BOARD"):
+                    if not server["board"]: server["board"].extend([server["deck"].pop() for _ in range(3)])
+                    else: server["board"].append(server["deck"].pop())
+                    server["current_turn_idx"] = 1 - server["btn_idx"] # 플랍후엔 BB먼저
+                    st.rerun()
